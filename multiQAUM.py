@@ -1,56 +1,10 @@
-import pandas as pd
-import numpy as np
-from sklearn import preprocessing
-from sklearn.model_selection import train_test_split
-
-def fetch_data_random_seed_val(n_samples, seed):
-    dataset = pd.read_csv('pulsar.csv')
-
-    data0 = dataset[dataset[dataset.columns[8]] == 0]
-    data0 = data0.sample(n=n_samples, random_state=seed)
-    X0 = data0[data0.columns[0:8]].values
-    Y0 = data0[data0.columns[8]].values
-
-    data1 = dataset[dataset[dataset.columns[8]] == 1]
-    data1 = data1.sample(n=n_samples, random_state=seed)
-    X1 = data1[data1.columns[0:8]].values
-    Y1 = data1[data1.columns[8]].values
-
-    X = np.append(X0, X1, axis=0)
-    Y = np.append(Y0, Y1, axis=0)
-
-    min_max_scaler = preprocessing.MinMaxScaler(feature_range=(0, np.pi))
-    X = min_max_scaler.fit_transform(X)
-
-    # Separate the test and training datasets
-    train_X, validation_X, train_Y, validation_Y = train_test_split(X, Y, test_size=0.5, random_state=seed)
-
-    return train_X, validation_X, train_Y, validation_Y
-
-def fetch_data_random_seed(n_samples, seed):
-    dataset = pd.read_csv('pulsar.csv')
-
-    data0 = dataset[dataset[dataset.columns[8]] == 0]
-    data0 = data0.sample(n=int(n_samples / 2), random_state=seed)
-    X0 = data0[data0.columns[0:8]].values
-    Y0 = data0[data0.columns[8]].values
-
-    data1 = dataset[dataset[dataset.columns[8]] == 1]
-    data1 = data1.sample(n=int(n_samples / 2), random_state=seed)
-    X1 = data1[data1.columns[0:8]].values
-    Y1 = data1[data1.columns[8]].values
-    X = np.append(X0, X1, axis=0)
-
-    min_max_scaler = preprocessing.MinMaxScaler(feature_range=(0, np.pi))
-    X = min_max_scaler.fit_transform(X)
-
-    return X, np.append(Y0, Y1, axis=0)
-
 import abc
+
 from qat.lang.AQASM import H, RZ, RX, RY, CNOT, Program, QRoutine, build_gate
-from qat.lang.AQASM.bits import Qbit
 from qat.core import Observable, Term
 from qat.qpus import get_default_qpu
+
+import numpy as np
 
 from multiprocessing import Pool
 from functools import partial
@@ -158,25 +112,19 @@ class QuantumModel(abc.ABC):
                 return self.grad(weights, features, gradient_func)
 
 class MultiQAUM(QuantumModel):
-    def __init__(self, depth:int, nfeatures:int, nqbits:int, qpu=None, fpq=None):
+
+    n_local = 2
+    n_entangle = 1
+
+    def __init__(self, depth:int, nfeatures:int, nqbits:int, qpu=None):
         if nfeatures % nqbits != 0:
             raise ValueError("nqbits must be a factor of nfeatures")
         self.depth = depth
         self.nfeatures = nfeatures
         self.nqbits = nqbits
-        self.features_per_qbit = fpq if fpq else int(nfeatures/nqbits)
+        self.features_per_qbit = int(nfeatures/nqbits)
         self.qpu = qpu if qpu else get_default_qpu()
         self.obs = Observable(nqbits, pauli_terms=[Term(1, 'Z', [0])])
-        self.n_local = 2
-        self.n_entangle = 1
-
-    # def local_layer(self, layer_weights, qbits):
-    #     "Trainable rotation layer composed of a Z, X and Y rotation"
-    #     for i in range(self.nqbits):
-    #         RZ(float(layer_weights[i*self.n_local]))(qbits[i])
-    #         RX(float(layer_weights[i*self.n_local+1]))(qbits[i])
-    #         RY(float(layer_weights[i*self.n_local+2]))(qbits[i])
-    #     return
 
     def local_layer(self, layer_weights, qbits):
         "Trainable rotation layer composed of a Z, X and Y rotation"
@@ -191,8 +139,6 @@ class MultiQAUM(QuantumModel):
             ctr_i = i
             trg_i = 0 if i==self.nqbits-1 else i+1
             ZZ(float(layer_weights[i*self.n_entangle]))(qbits[ctr_i], qbits[trg_i])
-            # XX(float(layer_weights[i*self.n_entangle+1]))(qbits[ctr_i], qbits[trg_i])
-            # YY(float(layer_weights[i*self.n_entangle+2]))(qbits[ctr_i], qbits[trg_i])
         return
 
     def feature_layer(self, layer_features, qbits):
@@ -281,39 +227,46 @@ def step(model, optimizer, opt_state, weights, batch):
 
 import time
 
-def train(model, optimizer, data, val_data=None, num_epochs=150, resume=0):
-    
-    train_X, train_Y = data
-    if val_data: validate_X, validate_Y = val_data
-    if resume == 0:
-        weights = model.initialise_weights(seed=0)
-        train_losses = np.zeros((num_epochs))
-        train_weights = np.zeros((num_epochs+1, len(weights)))
-        train_weights[0,:] = weights
-    else:
-        train_losses = np.loadtxt("multi_train_losses.csv", delimiter=",")
-        train_weights = np.loadtxt("multi_train_weights.csv", delimiter=",")
-        weights = train_weights[resume+1,:]
+def do_train(model, optimizer, data, weight, num_epochs):
 
-    opt_state = optimizer.init(weights)
-    for i in range(resume, num_epochs):
-        start = time.time()
-        weights, opt_state, loss = step(
-            model, optimizer, opt_state, weights, list(zip(train_X, train_Y)))
-        end = time.time()
-        train_losses[i] = loss
-        train_weights[i+1,:] = weights
-        np.savetxt("multi_train_weights.csv", train_weights, delimiter=',')
-        np.savetxt("multi_train_losses.csv", train_losses, delimiter=',')
-        train_acc = accuracy(model, weights, (train_X, train_Y))
-        if val_data: 
-            val_acc = accuracy(model, weights, (validate_X, validate_Y))
-            print(f"Epoch {i} loss: {train_losses[i]:5.3f} Training Acc: {train_acc*100}% Validation Acc: {val_acc*100}% Time taken: {end - start:4.1f}s")
-        else:
-            print(f"Epoch {i} loss: {train_losses[i]:5.3f} Training Acc: {train_acc*100}% Time taken: {end - start:4.1f}s")
-    np.savetxt("multi_train_losses.csv", train_losses, delimiter=',')
-    np.savetxt("multi_train_weights.csv", train_weights, delimiter=',')
+    train_X, train_Y = data
+    opt_state = optimizer.init(weight)
+    for i in range(0, num_epochs):
+        weight, opt_state, loss = step(
+            model, optimizer, opt_state, weight, list(zip(train_X, train_Y))
+        )
+        yield weight, loss
+
+def train(model, optimizer, data, val_data=None, num_epochs=150, resume=0):
+
+    if resume == 0:
+        init_weights = model.initialise_weights(seed=0)
+        losses = np.zeros((num_epochs))
+        weights = np.zeros((num_epochs+1, len(init_weights)))
+        weights[0,:] = init_weights
+    else:
+        losses = np.loadtxt("multi_train_losses.csv", delimiter=",")
+        weights = np.loadtxt("multi_train_weights.csv", delimiter=",")
+
+    t = time.time()
+    i = 0
+    for weight, loss in do_train(model, optimizer, data, weights[0], num_epochs):
+        t = time.time() - t
+        i += 1
+        weights[i+1], losses[i] = weight, loss
+        np.savetxt("multi_train_weights.csv", weights, delimiter=',')
+        np.savetxt("multi_train_losses.csv", losses, delimiter=',')
+        train_acc = accuracy(model, weights[i+1], data)
+        print(f"Epoch {i}: Loss: {losses[i]:5.3f} Training Acc: {train_acc*100}% Time taken: {t:4.1f}s")
+        if val_data:
+            val_acc = validate(model, weights[i+1], val_data)
+            print(f"  Validation Acc: {val_acc*100}%")
     return weights
+
+def validate(model, weights, val_data):
+    validate_X, validate_Y = val_data
+    val_acc = accuracy(model, weights, (validate_X, validate_Y))
+    return val_acc
 
 def accuracy(model, weights, data):
     errors = 0
@@ -322,26 +275,3 @@ def accuracy(model, weights, data):
         errors += abs(y - round(probofone))
     acc = 1 - errors/len(data[0])
     return acc
-
-np.random.seed(0)
-
-from qat.core.console import display
-
-model = MultiQAUM(2, 8, 2)
-
-train_X, validate_X, train_Y, validate_Y = fetch_data_random_seed_val(500, 0)
-#train_X, train_Y = fetch_data_random_seed(150, 0)
-
-# init_weights = model.initialise_weights(seed=0)
-# prog = model.program(init_weights, train_X[0])
-# circ = prog.to_circ()
-# display(circ, max_depth=None)
-
-print(
-    f"Training multiQAUM with:\n{model.depth} layers\
-    \n{model.features_per_qbit} features per qubit\
-    \n{model.nqbits} qubits"
-)
-
-opt = optax.adam(learning_rate=1e-1)
-weights = train(model, opt, (train_X, train_Y), val_data=(validate_X, validate_Y), num_epochs=150)
