@@ -50,6 +50,13 @@ def CY(theta):
     routine.apply(CNOT, 0, 1)
     return routine
 
+def measure(model, weights:np.ndarray, features:np.ndarray):
+    """Perform measurement on the parameterised quantum model"""
+    prog = model.program(weights, features)
+    job = prog.to_circ().to_job(observable=model.obs)
+    expec = get_default_qpu().submit(job).value
+    return expec
+
 class QuantumModel(abc.ABC):
     @abc.abstractmethod
     def model(self, weights, features, qbits):
@@ -62,20 +69,13 @@ class QuantumModel(abc.ABC):
         self.model(weights, features, qbits)
         return prog
 
-    def measure(self, weights:np.ndarray, features:np.ndarray):
-        """Perform measurement on the parameterised quantum model"""
-        prog = self.program(weights, features)
-        job = prog.to_circ().to_job(observable=self.obs)
-        expec = self.qpu.submit(job).value
-        return expec
-
     def _parameter_shift(self, index, weights, features):
         """Parameter-shift gradient calculation for a quantum model"""
         shift = np.zeros_like(weights)
         shift[index] += np.pi/2
         gradient = .5 * (
-            self.measure(weights + shift, features) 
-            - self.measure(weights - shift, features)
+            measure(self, weights + shift, features) 
+            - measure(self, weights - shift, features)
         )
         return gradient
 
@@ -123,7 +123,6 @@ class MultiQAUM(QuantumModel):
         self.nfeatures = nfeatures
         self.nqbits = nqbits
         self.features_per_qbit = int(nfeatures/nqbits)
-        self.qpu = qpu if qpu else get_default_qpu()
         self.obs = Observable(nqbits, pauli_terms=[Term(1, 'Z', [0])])
 
     def local_layer(self, layer_weights, qbits):
@@ -187,91 +186,3 @@ class MultiQAUM(QuantumModel):
         n = (n_train_layer*self.depth) + self.nqbits*(self.n_local + self.n_entangle)
         weights = np.random.uniform(low=-1., high=1., size=(n)) * 2.*np.pi
         return weights
-    
-import jax.numpy as jnp
-import jax
-import optax
-
-def qubit_probability(expec):
-    """Convert expectation value to probability of measuring the state |1)"""
-    probofone = (expec + 1.)/2 # prob. of positive prediction
-    return probofone
-
-def cross_entropy(yp, y):
-    "Cross entropy loss function"
-    return -y*jnp.log(yp) - (1 - y)*jnp.log(1 - yp)
-
-def step(model, optimizer, opt_state, weights, batch):
-
-    batch_loss = 0
-    batch_grads = np.zeros_like(weights)
-
-    for (features, label) in batch:
-        prediction = qubit_probability(model.measure(weights, features))
-        loss = cross_entropy(prediction, label)
-
-        prediction_grads = model.gradient(weights, features)
-        loss_grad = jax.grad(cross_entropy)(prediction, label)
-        grads = loss_grad * np.array(prediction_grads)
-
-        batch_loss += loss
-        batch_grads += grads
-
-    batch_loss /= len(batch)
-    batch_grads /= len(batch)
-
-    updates, opt_state = optimizer.update(batch_grads, opt_state, weights)
-    weights = optax.apply_updates(weights, updates)
-
-    return weights, opt_state, batch_loss
-
-import time
-
-def do_train(model, optimizer, data, weight, num_epochs):
-
-    train_X, train_Y = data
-    opt_state = optimizer.init(weight)
-    for i in range(0, num_epochs):
-        weight, opt_state, loss = step(
-            model, optimizer, opt_state, weight, list(zip(train_X, train_Y))
-        )
-        yield weight, loss
-
-def train(model, optimizer, data, val_data=None, num_epochs=150, resume=0):
-
-    if resume == 0:
-        init_weights = model.initialise_weights(seed=0)
-        losses = np.zeros((num_epochs))
-        weights = np.zeros((num_epochs+1, len(init_weights)))
-        weights[0,:] = init_weights
-    else:
-        losses = np.loadtxt("multi_train_losses.csv", delimiter=",")
-        weights = np.loadtxt("multi_train_weights.csv", delimiter=",")
-
-    t = time.time()
-    i = 0
-    for weight, loss in do_train(model, optimizer, data, weights[0], num_epochs):
-        t = time.time() - t
-        i += 1
-        weights[i+1], losses[i] = weight, loss
-        np.savetxt("multi_train_weights.csv", weights, delimiter=',')
-        np.savetxt("multi_train_losses.csv", losses, delimiter=',')
-        train_acc = accuracy(model, weights[i+1], data)
-        print(f"Epoch {i}: Loss: {losses[i]:5.3f} Training Acc: {train_acc*100}% Time taken: {t:4.1f}s")
-        if val_data:
-            val_acc = validate(model, weights[i+1], val_data)
-            print(f"  Validation Acc: {val_acc*100}%")
-    return weights
-
-def validate(model, weights, val_data):
-    validate_X, validate_Y = val_data
-    val_acc = accuracy(model, weights, (validate_X, validate_Y))
-    return val_acc
-
-def accuracy(model, weights, data):
-    errors = 0
-    for x, y in zip(data[0], data[1]):
-        probofone = qubit_probability(model.measure(weights, x))
-        errors += abs(y - round(probofone))
-    acc = 1 - errors/len(data[0])
-    return acc
