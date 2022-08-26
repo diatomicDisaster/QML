@@ -1,4 +1,4 @@
-from multiQAUM import ZZQAUM, train_validate
+from SMFE.model import ZZQAUM, train_validate
 
 import pandas as pd
 import numpy as np

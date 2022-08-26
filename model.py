@@ -145,7 +145,7 @@ def train_validate(model, optimizer, data, val_data=None, num_epochs=150, resume
             print(f"  Validation Acc: {val_acc*100}%")
     return weights
 
-class MultiQAUM:
+class QuantumModel:
 
     def __init__(self, depth:int, nfeatures:int, nqbits:int, qpu=None):
         if nfeatures % nqbits != 0:
@@ -212,7 +212,7 @@ def ZZ(theta):
     routine.apply(CNOT, 0, 1)
     return routine
 
-class ZZQAUM(MultiQAUM):
+class ZZEncoder(QuantumModel):
 
     n_local = 2
     n_entangle = 1
