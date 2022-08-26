@@ -1,5 +1,4 @@
-from quantum import MultiQAUM
-from classical import train_validate
+from multiQAUM import ZZQAUM, train_validate
 
 import pandas as pd
 import numpy as np
@@ -54,9 +53,9 @@ np.random.seed(0)
 
 from qat.core.console import display
 
-model = MultiQAUM(2, 8, 2)
+model = ZZQAUM(2, 8, 2)
 
-train_X, validate_X, train_Y, validate_Y = fetch_data_random_seed_val(5, 0)
+train_X, validate_X, train_Y, validate_Y = fetch_data_random_seed_val(150, 0)
 
 print(
     f"Training multiQAUM with:\n{model.depth} layers\

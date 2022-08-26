@@ -1,4 +1,4 @@
-from quantum import MultiQAUM
+from quantum import ZZQAUM
 from classical import train_validate
 
 import pandas as pd
@@ -52,11 +52,17 @@ def fetch_data_random_seed(n_samples, seed):
 
 np.random.seed(0)
 
-model = MultiQAUM(2, 8, 2)
+from qat.core.console import display
 
-train_X, validate_X, train_Y, validate_Y = fetch_data_random_seed_val(5, 0)
+model = ZZQAUM(2, 8, 2)
 
-init_weights = model.initialise_weights(seed=0)
-prog = model.prog(init_weights, train_X[0])
-job = prog.to_circ().to_job(observable=model.obs)
-job.dump("test.job")
+train_X, validate_X, train_Y, validate_Y = fetch_data_random_seed_val(50, 0)
+
+print(
+    f"Training multiQAUM with:\n{model.depth} layers\
+    \n{model.features_per_qbit} features per qubit\
+    \n{model.nqbits} qubits"
+)
+
+opt = adam(learning_rate=1e-1)
+weights = train_validate(model, opt, (train_X, train_Y), val_data=(validate_X, validate_Y), num_epochs=150)

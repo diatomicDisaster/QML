@@ -1,42 +1,51 @@
-from qat.lang.AQASM import Program, CNOT, QRoutine, H
+import pandas as pd
+import numpy as np
+from sklearn import preprocessing
+from sklearn.model_selection import train_test_split
+
 from qat.qpus import get_default_qpu
+from quantum import ZZQAUM
 
-qpu = get_default_qpu()
+def fetch_data_random_seed_val(n_samples, seed):
+    dataset = pd.read_csv('pulsar.csv')
 
-def routine_one():
-    rout = QRoutine()
-    qbit, anc = rout.new_wires(2)
-    CNOT(qbit, anc)
-    return rout
+    data0 = dataset[dataset[dataset.columns[8]] == 0]
+    data0 = data0.sample(n=n_samples, random_state=seed)
+    X0 = data0[data0.columns[0:8]].values
+    Y0 = data0[data0.columns[8]].values
 
-def routine_two():
-    rout = QRoutine()
-    qbit, anc = rout.new_wires(2)
-    CNOT(qbit, anc)
-    return rout
+    data1 = dataset[dataset[dataset.columns[8]] == 1]
+    data1 = data1.sample(n=n_samples, random_state=seed)
+    X1 = data1[data1.columns[0:8]].values
+    Y1 = data1[data1.columns[8]].values
 
-rout_one = routine_one()
-rout_two = routine_two()
+    X = np.append(X0, X1, axis=0)
+    Y = np.append(Y0, Y1, axis=0)
 
+    min_max_scaler = preprocessing.MinMaxScaler(feature_range=(0, np.pi))
+    X = min_max_scaler.fit_transform(X)
 
-prog = Program()
-qbits = prog.qalloc(2)
-anc = prog.qalloc(1)
+    # Separate the test and training datasets
+    train_X, validation_X, train_Y, validation_Y = train_test_split(X, Y, test_size=0.5, random_state=seed)
 
-H(qbits[0])
-H(qbits[1])
-CNOT(qbits[0], qbits[1])
-#CNOT(qbits[1], anc)
+    return train_X, validation_X, train_Y, validation_Y
 
-#prog.apply(rout_one, qbits[0], qbits[2])
-#prog.apply(rout_two, qbits[1], qbits[3])
+train_X, validate_X, train_Y, validate_Y = fetch_data_random_seed_val(5, 0)
 
-circ = prog.to_circ()
-circ.display()
+model = ZZQAUM(2, 8, 2)
+init_weights = model.initialise_weights()
+prog = model.program(init_weights, train_X[0])
+job = prog.to_circ().to_job(observable=model.obs)
+#job.dump("test.job")
 
-job = circ.to_job() #convert circuit to executable job
-result = qpu.submit(job) #submit the job to a QPU
+import subprocess
 
-print("\nBob measures the state:")
-for sample in result:
-  print(f"  {sample.state} with probability {abs(sample.amplitude)**2:3.2f}") #print each complex amplitude and basis vector
+def submit_job(job, label):
+    job.dump(f"{label}.job")
+    result = subprocess.run(
+        f"qat-jobrun --qpu qat.linalg.LinAlg -o {label}.res {label}.job",
+        stdout=subprocess.PIPE
+    )
+    print(result.stdout)
+
+submit_job(job, 'test')

@@ -111,10 +111,7 @@ class QuantumModel(abc.ABC):
             else:
                 return self.grad(weights, features, gradient_func)
 
-class MultiQAUM(QuantumModel):
-
-    n_local = 2
-    n_entangle = 1
+class QAUM(QuantumModel):
 
     def __init__(self, depth:int, nfeatures:int, nqbits:int, qpu=None):
         if nfeatures % nqbits != 0:
@@ -124,27 +121,6 @@ class MultiQAUM(QuantumModel):
         self.nqbits = nqbits
         self.features_per_qbit = int(nfeatures/nqbits)
         self.obs = Observable(nqbits, pauli_terms=[Term(1, 'Z', [0])])
-
-    def local_layer(self, layer_weights, qbits):
-        "Trainable rotation layer composed of a Z, X and Y rotation"
-        for i in range(self.nqbits):
-            RX(float(layer_weights[i*self.n_local]))(qbits[i])
-            RY(float(layer_weights[i*self.n_local+1]))(qbits[i])
-        return
-
-    def entangling_layer(self, layer_weights, qbits):
-        "Entangling layer composed of ZZ gates"
-        for i in range(0, self.nqbits):
-            ctr_i = i
-            trg_i = 0 if i==self.nqbits-1 else i+1
-            ZZ(float(layer_weights[i*self.n_entangle]))(qbits[ctr_i], qbits[trg_i])
-        return
-
-    def feature_layer(self, layer_features, qbits):
-        "Embed a feature on each qubit"
-        for i in range(self.nqbits):
-            RZ(float(layer_features[i]))(qbits[i])
-        return
 
     def model(self, weights, features, qbits):
         "Function to build a parameterised QAUM model on an array of qubits"
@@ -186,3 +162,38 @@ class MultiQAUM(QuantumModel):
         n = (n_train_layer*self.depth) + self.nqbits*(self.n_local + self.n_entangle)
         weights = np.random.uniform(low=-1., high=1., size=(n)) * 2.*np.pi
         return weights
+
+class ZZQAUM(QAUM):
+
+    n_local = 2
+    n_entangle = 1
+
+    def __init__(self, depth:int, nfeatures:int, nqbits:int, qpu=None):
+        if nfeatures % nqbits != 0:
+            raise ValueError("nqbits must be a factor of nfeatures")
+        self.depth = depth
+        self.nfeatures = nfeatures
+        self.nqbits = nqbits
+        self.features_per_qbit = int(nfeatures/nqbits)
+        self.obs = Observable(nqbits, pauli_terms=[Term(1, 'Z', [0])])
+
+    def local_layer(self, layer_weights, qbits):
+        "Trainable rotation layer composed of a Z, X and Y rotation"
+        for i in range(self.nqbits):
+            RX(float(layer_weights[i*self.n_local]))(qbits[i])
+            RY(float(layer_weights[i*self.n_local+1]))(qbits[i])
+        return
+
+    def entangling_layer(self, layer_weights, qbits):
+        "Entangling layer composed of ZZ gates"
+        for i in range(0, self.nqbits):
+            ctr_i = i
+            trg_i = 0 if i==self.nqbits-1 else i+1
+            ZZ(float(layer_weights[i*self.n_entangle]))(qbits[ctr_i], qbits[trg_i])
+        return
+
+    def feature_layer(self, layer_features, qbits):
+        "Embed a feature on each qubit"
+        for i in range(self.nqbits):
+            RZ(float(layer_features[i]))(qbits[i])
+        return

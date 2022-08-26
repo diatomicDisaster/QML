@@ -4,7 +4,6 @@ import jax
 import optax
 
 from qat.qpus import get_default_qpu
-
 from quantum import measure
 
 def qubit_probability(expec):
@@ -75,8 +74,6 @@ def resume_or_init(model, num_epochs, resume):
         losses = np.loadtxt("multi_train_losses.csv", delimiter=",")
         weights = np.loadtxt("multi_train_weights.csv", delimiter=",")
     return weights, losses
-
-import time
 
 def train_validate(model, optimizer, data, val_data=None, num_epochs=150, resume=0):
     weights, losses = resume_or_init(model, num_epochs, resume)
